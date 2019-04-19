@@ -1,0 +1,386 @@
+---
+title: "DS6306_CaseStudy2_Limin Zheng"
+author: "Limin Zheng"
+date: "April 18, 2019"
+output:
+  html_document: default
+  pdf_document: default
+---
+Github Link: https://github.com/liminzheng/CaseStudy2DDS 
+Video Link: https://www.youtube.com/watch?v=Yd7sDpwXzA0
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Data Analytics and predictive model for Talent Management
+###By DDSAnalytics
+####Introduction
+Talent management is defined as the iterative process of developing and retaining employees. It may include workforce planning, employee training programs, identifying high-potential employees and reducing/preventing voluntary employee turnover (attrition). To gain a competitive edge over its competition, DDSAnalytics is planning to leverage data science for talent management. The executive leadership has identified predicting employee turnover as its first application of data science for talent management. Before the business green lights the project, they have tasked your data science team to conduct an analysis of existing employee data. 
+
+Your have been given a dataset (CaseStudy2-data.csv) to do a data analysis to identify factors that lead to attrition.  You should identify the top three factors that contribute to turnover. There may or may not be a need to create derived attributes/variables/features. The business is also interested in learning about any job role specific trends that may exist in the data set (e.g., "Data Scientists have the highest job satisfaction"). You can also provide any other interesting trends and observations from your analysis. The analysis should be backed up by robust experimentation and appropriate visualization. 
+
+###Exploratory Data Analysis
+
+####Data Importing and Cleaning
+```{r}
+#Data importing
+talentdata<- read.csv("CaseStudy2-data.csv", header = TRUE, stringsAsFactors=TRUE)
+
+#Data cleaning by drop some columns not related to the analysis
+drops <- c("EmployeeCount", "Over18", "Rand", "StandardHours", "EmployeeNumber")
+talentdata <- talentdata[ , !(names(talentdata) %in% drops)]
+val_attrition <- read.csv("CaseStudy2Validation No Attrition.csv", header = TRUE)
+val_attrition <- val_attrition[ , !(names(val_attrition) %in% drops)]
+val_attrition = val_attrition[order(val_attrition$ID), ]
+
+library(readxl)
+val_salary <- read_excel("CaseStudy2Validation No Salary.xlsx")
+val_salary <- val_salary[ , !(names(val_salary) %in% drops)]
+library(plyr)
+#talentdata$Attrition<- revalue(talentdata$Attrition, c("Yes"="1", "No"="0"))
+```
+
+
+```{r}
+#Get a basic idea of all the variables
+#summary(talentdata)
+#str(talentdata)
+```
+
+From the summary, it can be seen there is no NAs in the continuous variables. Struction of the dataframe talentdata shows, variables Attrition, BusinessTravel, Department, EducationField, Gender, JobRole, MatitalStatus, Overtime, are treated as factors.
+
+####Transformation of MonthlyIncome data
+
+```{r}
+par(mfrow=c(2,3))
+hist(talentdata$MonthlyIncome, main = "MonthlyIncome")
+OutVals1 = boxplot(talentdata$MonthlyIncome, main = "MonthlyIncome")$out
+qqnorm(talentdata$MonthlyIncome, main = "MonthlyIncome")
+talentdata$LogMonthlyIncome <- log(talentdata$MonthlyIncome)
+hist(talentdata$LogMonthlyIncome, main = "LogMonthlyIncome")
+OutVals = boxplot(talentdata$LogMonthlyIncome, main = "LogMonthlyIncome")$out
+qqnorm(talentdata$LogMonthlyIncome, main = "LogMonthlyIncome")
+```
+
+
+
+From the histogram, boxplot and qqplot, MonthlyIncome is highly skewed before log transformation. After log transformation, MonthlyIncome is normal.
+
+```{r}
+#Separate continuous and categorical variables for analysis
+talentdata_conti <- talentdata[, !sapply(talentdata, is.factor)]
+talentdata_categ <- talentdata[, sapply(talentdata, is.factor)]
+```
+
+
+####Correlation of predictors
+
+```{r}
+library(corrplot)
+#correlation of all the continuous variables, column of Attrition is first dropped.
+correlation <- cor(talentdata_conti)
+#correlation plot
+corrplot(correlation)
+```
+
+From correlation plot of continuous variables, we can see that there are positive correlations between variables, LogMonthlyIncome, JobLevel, TotalWorkingYears, Age, YearsAtCompany, YearInCurrentRole, YearsSinceLastPromotion and YearsWithCurrentManager.
+
+```{r}
+library(GoodmanKruskal)
+cat_cor<- GKtauDataframe(talentdata_categ)
+plot(cat_cor, corrColors = "blue")
+```
+
+From correlation plot of categorical variables, we can see there is a high correlation between Department and JobRole.
+
+
+####Check outliers in the dataset
+```{r}
+mod <- lm(LogMonthlyIncome ~ ., data=talentdata[, -18])
+cooksd <- cooks.distance(mod)
+plot(cooksd, pch="*", cex=2, main="Influential Obs by Cooks distance")  # plot cook's distance
+abline(h = 4*mean(cooksd, na.rm=T), col="blue")  # add cutoff line
+text(x=1:length(cooksd)+1, y=cooksd, labels=ifelse(cooksd>12*mean(cooksd, na.rm=T),names(cooksd),""), col="Blue")  # add labels
+influential <- as.numeric(names(cooksd)[(cooksd > 12*mean(cooksd, na.rm=T))])  # influential row numbers
+talentdata_outlier <- talentdata[influential, ]
+talentdata_clean <- talentdata[-influential, ]
+```
+
+####Data analysis using PCA analysis for continuous variables
+
+```{r}
+library(stats)
+#PCA analysis for continuous variables, except columns ID, MonthlyIncome and LogMonthlyIncome
+pca.result<-prcomp(talentdata_conti[, -c(1, 11, 25)])
+#Scree plot and determine the amount of PC's needed to retain approximately 90% of the total variation in the data set
+par(mfrow=c(1,2))
+eigenvalues<-(pca.result$sdev)^2
+plot(1:22,eigenvalues/sum(eigenvalues),type="l",main="Scree Plot",ylab="Prop. Var. Explained")
+cump<-cumsum(eigenvalues/sum(eigenvalues))
+plot(1:22,cump,type="l",main="Cumulative proportion",ylim=c(0,1))
+points(x=1, y=0.9, type = "p", pch=10, col = "red")
+#From scree plot and cumulative proportion plot, we can see only One derived PCs needed to retain approximately 90% of the total variation in the data set.
+```
+
+####ggplots of PCs for visualization
+
+```{r}
+library(ggplot2)
+pca.scores<-pca.result$x
+#pca.result$rotation
+pca.scores<-data.frame(pca.scores)
+pca.scores$Attrition <- talentdata$Attrition
+#Use ggplot2 to plot the first few pc's
+ggplot(data = pca.scores, aes(x = PC1, y = PC2)) +
+  geom_point(aes(col=Attrition), size=1)+
+  geom_hline(yintercept = 0, colour = "gray65") +
+  geom_vline(xintercept = 0, colour = "gray65") +
+ labs(title = "PCA plot of talent management data",color = "Attrition")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+From the result of PCA plots, which do not have clear separation of response. We can not use LDA for the classification.
+
+###Objective 1 Predict Attrition
+
+####Naive bayes model
+```{r}
+#Split train and test model
+set.seed(345)
+nr = 0.7*nrow(talentdata)
+smp=sample(1:nrow(talentdata), nr)
+train=talentdata[smp,]
+test=talentdata[-smp,]
+library(e1071)
+library(caret)
+model.naive <- naiveBayes(Attrition ~ ., data=train[,-c(1, 18)])
+attrition.pred.naive <- predict(model.naive, test[,-c(1, 18)], type="class")
+confusionMatrix(attrition.pred.naive, test$Attrition)
+
+```
+
+
+####Train model with Naive bayes method and get importance of predictors
+```{r}
+#Prepare training scheme
+control <- trainControl(method="repeatedcv", number=10, repeats=3, classProbs = TRUE)
+set.seed(345)
+#Train the model
+model.naive.t <- train( Attrition ~ ., data=train[, -c(1,18)], method="naive_bayes", trControl=control)
+attrition.pred.naive.t <- predict(model.naive.t, test[-c(1,18)])
+confusionMatrix(attrition.pred.naive.t, test$Attrition)
+#Top 10 Glmnet predictor ranking
+importance.naive.t <- varImp(model.naive.t, scale=FALSE)
+rank.naive.t <- importance.naive.t$importance
+write.csv(rank.naive.t, "rank.naive.t.csv")
+rank.naive.t <- read.csv("rank.naive.t.csv", header=TRUE)
+colnames(rank.naive.t) <- c("Predictors", "Importance")
+rank.naive.t <- rank.naive.t[order(rank.naive.t$Importance, decreasing = TRUE),]
+ggplot(rank.naive.t[1:20,], aes(x=reorder(Predictors, Importance),y=Importance)) + geom_bar(stat = "identity") + coord_flip() + labs(title="Importance of Predictors", x="Predictors", y="Importance") +theme(axis.text.x=element_text(hjust=0.5, vjust=0.5, size = 12))+theme(axis.text.y=element_text(size = 12))
+
+```
+
+####Custom Naive Bayes model
+```{r}
+#Split train and test model
+set.seed(345)
+nr = 0.7*nrow(talentdata)
+smp=sample(1:nrow(talentdata), nr)
+train=talentdata[smp,]
+test=talentdata[-smp,]
+library(e1071)
+library(caret)
+model.naive.ct <- naiveBayes(Attrition ~ OverTime + YearsAtCompany + YearsInCurrentRole+LogMonthlyIncome+TotalWorkingYears+YearsWithCurrManager+JobLevel+StockOptionLevel+Age, data=train)
+attrition.pred.naive.ct <- predict(model.naive.ct, test, type="class")
+confusionMatrix(attrition.pred.naive.ct, test$Attrition)
+```
+
+####Naive Bayes model After outlier removal
+```{r}
+#Split train and test model
+set.seed(345)
+nr = 0.7*nrow(talentdata_clean)
+smp=sample(1:nrow(talentdata_clean), nr)
+train_clean=talentdata_clean[smp,]
+test_clean=talentdata_clean[-smp,]
+
+library(e1071)
+model.naive2 <- naiveBayes(Attrition ~ ., data=train_clean[,-c(1,18)])
+attrition.pred.naive2 <- predict(model.naive2, test_clean[,-c(1,18)], type="class")
+confusionMatrix(attrition.pred.naive2, test_clean$Attrition)
+```
+The removal of outliers can improve the specification and total accuracy.
+
+
+####Train model with knn and get importance of predictors
+```{r}
+#Prepare training scheme
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+set.seed(345)
+#Train the model
+model.knn <- train( Attrition ~ ., data=train[, -c(1,18)], method="knn", trControl=control)
+attrition.pred.knn <- predict(model.knn, test[-c(1,18)])
+confusionMatrix(attrition.pred.knn, test$Attrition)
+#Top 10 predictor ranking
+importance.knn <- varImp(model.knn, scale=FALSE)
+rank.knn <- importance.knn$importance
+write.csv(rank.knn, "rank.knn.csv")
+rank.knn <- read.csv("rank.knn.csv", header=TRUE)
+colnames(rank.knn) <- c("Predictors", "Importance")
+rank.knn <- rank.knn[order(rank.knn$Importance, decreasing = TRUE),]
+ggplot(rank.knn[1:20,], aes(x=reorder(Predictors, Importance),y=Importance)) + geom_bar(stat = "identity") + coord_flip() + labs(title="Importance of Predictors", x="Predictors", y="Importance") +theme(axis.text.x=element_text(hjust=0.5, vjust=0.5, size = 12))+theme(axis.text.y=element_text(size = 12))
+
+```
+
+####Custom knn model
+
+```{r}
+#Split train and test model
+
+talentdata_knn <- talentdata
+talentdata_knn$OverTime<- revalue(talentdata_knn$OverTime, c("Yes"="1", "No"="0"))
+talentdata_knn_conti <- talentdata_knn[, !sapply(talentdata_knn, is.factor)]
+talentdata_knn_conti$Attrition <- talentdata$Attrition
+set.seed(345)
+nr = 0.7*nrow(talentdata_knn_conti)
+smp=sample(1:nrow(talentdata_knn_conti), nr)
+train_knn=talentdata_knn_conti[smp,]
+test_knn=talentdata_knn_conti[-smp,]
+library(class)
+knn.3 = class::knn(train_knn[,-26], test_knn[, -26], train_knn$Attrition, k=3)
+test_knn$AttritionPred3 = knn.3
+confusionMatrix(table(test_knn$AttritionPred3, test_knn$Attrition))
+```
+
+We will use customized Naive Bayes methods with all the talentdata set to do the prediction.
+
+####Prediction for Attrition
+```{r}
+#Use as much data as possible for the naive bayes model for prediction
+model.naive3 <- naiveBayes(Attrition ~ ., data=talentdata_clean[,-c(1, 18)])
+val_attrition$LogMonthlyIncome <- log(val_attrition$MonthlyIncome)
+AttritionPred <- predict(model.naive3, val_attrition, type="class")
+attrition.pred <- data.frame("ID"=val_attrition$ID, AttritionPred)
+write.csv(attrition.pred, "Case2PredictionsZheng Attrition.csv")
+```
+
+
+###Objective 2 Predict MonthlyIncome
+
+####train model with glmnet to find importance of predictors
+```{r}
+library(caret)
+#Prepare training scheme
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+#Train the model, lasso
+model.glmnet <- train(LogMonthlyIncome ~ ., data=train[, -c(3,18)], method="glmnet", trControl=control)
+#Predicted 
+LogMonthlyIncome.pred.glmnet<-predict(model.glmnet,newdata=test[, -c(3,18)])
+#Check RMSE for Linear Regression Model
+library(Metrics)
+rmse(test$MonthlyIncome,exp(LogMonthlyIncome.pred.glmnet))
+```
+
+####Predictor importance ranking
+```{r}
+#Top 10 Glmnet predictor ranking
+importance.glmnet <- varImp(model.glmnet, scale=FALSE)
+rank.glmnet <- importance.glmnet$importance
+write.csv(rank.glmnet, "rank.glmnet.csv")
+rank.glmnet <- read.csv("rank.glmnet.csv", header=TRUE)
+colnames(rank.glmnet) <- c("Predictors", "Importance")
+rank.glmnet <- rank.glmnet[order(rank.glmnet$Importance, decreasing = TRUE),]
+ggplot(rank.glmnet[1:10,], aes(x=reorder(Predictors, Importance),y=Importance)) + geom_bar(stat = "identity") + coord_flip() + labs(title="Importance of Predictors", x="Predictors", y="Importance") +theme(axis.text.x=element_text(hjust=0.5, vjust=0.5, size = 12))+theme(axis.text.y=element_text(size = 12))
+```
+
+From the Predictor Importance plot, we can see the top two predictors are JobLevel and JobRole, customize the linear model using only these two predictors.
+
+####Custom Model
+```{r}
+model.lm <- lm(LogMonthlyIncome ~ JobLevel + JobRole + JobLevel*JobRole, data=train)
+#Predicted 
+LogMonthlyIncome.pred.lm<-predict(model.lm,newdata=test)
+#RMSE
+rmse(test$MonthlyIncome,exp(LogMonthlyIncome.pred.lm))
+summary(model.lm)
+```
+
+####Diagnostic plots of linear model
+
+```{r echo=FALSE, include = FALSE}
+#Function to print out the diagnostic plots for the multiple linear regression
+mlrplots <- function(fit, hidenum = TRUE)
+{
+  #library(MASS)
+  sres <- rstudent(fit)
+  res <- resid(fit)
+  leverage <- hatvalues(fit)
+  par(mfrow=c(2,3))
+  #Plot residuals
+  plot(fitted(fit), res, xlab = "Fitted", ylab = "Residuals")
+  abline(h=0, col="blue", lty=2)  
+  #Plot studentized residuals
+  plot(fitted(fit), sres, xlab = "Fitted", ylab = "StudResiduals")
+  abline(h=-2, col="blue", lty=2)
+  abline(h=2, col="blue", lty=2)
+  if(!hidenum)
+    text(sres~fitted(fit), y=sres, labels=ifelse( abs(sres) >= 2, names(sres),""), col="red")  
+  #Plot Leverage - examine any observations ~2-3 times greater than the average hat value
+  plot(x = leverage, y = sres, xlab = "Leverage", ylab = "StudResiduals")
+  abline(h=-2, col="blue", lty=2)
+  abline(h=2, col="blue", lty=2)
+  abline(v = mean(leverage)*2, col="blue", lty=2) #line is at 2x mean
+  #QQ Plot
+  qqnorm(sres, xlab="Quantile", ylab="Residual", main = NULL) 
+  qqline(sres, col = 2, lwd = 2, lty = 2) 
+  #Cooks D
+  cooksd <- cooks.distance(fit)
+  sample_size <- length(fit$model[,1])
+  plot(cooksd, xlab = "Observation", ylab = "Cooks D", col = c("blue"))
+  abline(h = 4/sample_size, col="red")  # add cutoff line
+  if(!hidenum)
+  text(x=1:length(cooksd)+1, y=cooksd, labels=ifelse(cooksd>4/sample_size, names(cooksd),""), col="red")  # add labels
+  #Histogram of residuals with normal curve
+  #If the curve looks wrong try using the studentized residuals
+  hist(res, freq=FALSE, xlab = "Residuals", main = NULL)
+  curve(dnorm(x, mean=mean(res), sd=sd(res)), add=TRUE, col = "blue")
+}
+
+```
+
+
+```{r}
+#Diagnostic plots for the model
+mlrplots(model.lm)
+```
+
+####Custom Model after removal of outliers
+
+```{r}
+model.lm.ct <- lm(LogMonthlyIncome ~ JobLevel + JobRole + JobLevel*JobRole, data=train_clean)
+#Predicted 
+LogMonthlyIncome.pred.lm.ct<-predict(model.lm.ct,newdata=test_clean)
+#RMSE
+rmse(test_clean$MonthlyIncome,exp(LogMonthlyIncome.pred.lm.ct))
+summary(model.lm.ct)
+```
+
+```{r}
+#Diagnostic plots for the model
+mlrplots(model.lm.ct)
+```
+
+####Prediction for MonthlyIncome
+
+The removal of outliers can reduce RMSE, but without further validation, it may not be a good idea to drop outliers. Here we use the custom linear model for the prediction.
+
+```{r}
+val_salary$LogMonthlyIncome <- log(val_attrition$MonthlyIncome)
+SalaryPred <- predict(model.lm, val_salary[,-c(1,18)])
+MonthlyIncome <- exp(SalaryPred)
+salary.pred <- data.frame("ID"=val_salary$ID, MonthlyIncome)
+write.csv(salary.pred, "Case2PredictionsZheng Salary.csv")
+```
